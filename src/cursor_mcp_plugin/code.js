@@ -258,6 +258,8 @@ async function handleCommand(command, params) {
       return await setImageFill(params);
     case "rename_node":
       return await renameNode(params);
+    case "get_variables":
+      return await getVariables();
     case "create_section":
       return await createSection(params);
     case "set_parent":
@@ -1335,6 +1337,51 @@ async function deleteNode(params) {
   node.remove();
 
   return nodeInfo;
+}
+
+async function getVariables() {
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+  const variables = await figma.variables.getLocalVariablesAsync();
+  const namesById = new Map(variables.map((variable) => [variable.id, variable.name]));
+  const collectionsById = new Map(collections.map((collection) => [collection.id, collection]));
+
+  const describeValue = async (value) => {
+    if (value && typeof value === "object" && value.type === "VARIABLE_ALIAS") {
+      const name = namesById.get(value.id);
+      if (name) return { alias: name };
+      const remote = await figma.variables.getVariableByIdAsync(value.id);
+      return { alias: remote ? remote.name : value.id };
+    }
+    if (value && typeof value === "object" && "r" in value) {
+      return rgbaToHex(value);
+    }
+    return value;
+  };
+
+  return {
+    collections: collections.map((collection) => ({
+      id: collection.id,
+      name: collection.name,
+      modes: collection.modes.map((mode) => ({ modeId: mode.modeId, name: mode.name })),
+    })),
+    variables: await Promise.all(
+      variables.map(async (variable) => {
+        const collection = collectionsById.get(variable.variableCollectionId);
+        const values = {};
+        for (const mode of collection ? collection.modes : []) {
+          values[mode.name] = await describeValue(variable.valuesByMode[mode.modeId]);
+        }
+        return {
+          id: variable.id,
+          name: variable.name,
+          collection: collection ? collection.name : variable.variableCollectionId,
+          resolvedType: variable.resolvedType,
+          description: variable.description,
+          values: values,
+        };
+      })
+    ),
+  };
 }
 
 async function getStyles() {

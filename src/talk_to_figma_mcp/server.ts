@@ -2656,6 +2656,7 @@ type FigmaCommand =
   | "set_selections"
   | "set_image_fill"
   | "rename_node"
+  | "get_variables"
   | "create_section"
   | "set_parent";
 
@@ -2815,6 +2816,7 @@ type CommandParams = {
     nodeId: string;
     name: string;
   };
+  get_variables: Record<string, never>;
   create_section: {
     x: number;
     y: number;
@@ -3182,6 +3184,36 @@ server.tool(
           {
             type: "text",
             text: `Error renaming node: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Get Variables Tool
+server.tool(
+  "get_variables",
+  "Get the local variable collections of the current Figma document: their modes and every variable with its type, description and value per mode (aliases are given by variable name, colors as hex)",
+  {},
+  async () => {
+    try {
+      const result = await sendCommandToFigma("get_variables");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error getting variables: ${error instanceof Error ? error.message : String(error)
               }`,
           },
         ],
