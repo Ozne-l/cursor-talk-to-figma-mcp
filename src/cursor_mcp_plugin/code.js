@@ -335,6 +335,67 @@ function rgbaToHex(color) {
   );
 }
 
+var LAYOUT_KEYS = [
+  "visible",
+  "opacity",
+  "clipsContent",
+  "layoutMode",
+  "layoutWrap",
+  "itemSpacing",
+  "counterAxisSpacing",
+  "paddingLeft",
+  "paddingRight",
+  "paddingTop",
+  "paddingBottom",
+  "primaryAxisAlignItems",
+  "counterAxisAlignItems",
+  "primaryAxisSizingMode",
+  "counterAxisSizingMode",
+  "layoutSizingHorizontal",
+  "layoutSizingVertical",
+  "layoutPositioning",
+  "layoutAlign",
+  "layoutGrow",
+  "rectangleCornerRadii",
+  "strokeWeight",
+  "strokeAlign",
+  "boundVariables",
+  "componentId",
+  "componentProperties",
+  "componentPropertyDefinitions",
+  "componentPropertyReferences",
+];
+
+function collectVariableIds(value, ids) {
+  if (Array.isArray(value)) {
+    for (var item of value) collectVariableIds(item, ids);
+  } else if (value && typeof value === "object") {
+    if (value.type === "VARIABLE_ALIAS" && value.id) ids.add(value.id);
+    for (var k in value) collectVariableIds(value[k], ids);
+  }
+  return ids;
+}
+
+async function describeNode(node, document) {
+  var ids = collectVariableIds(document, new Set());
+  var variables = {};
+  for (var id of ids) {
+    var variable = await figma.variables.getVariableByIdAsync(id);
+    if (variable) variables[id] = variable.name;
+  }
+  var result = { document: document, variables: variables };
+  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+    result.description = node.description;
+  } else if (node.type === "INSTANCE") {
+    var main = await node.getMainComponentAsync();
+    if (main) {
+      result.mainComponent = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent.name + " / " + main.name : main.name;
+      result.description = main.parent && main.parent.type === "COMPONENT_SET" ? main.parent.description : main.description;
+    }
+  }
+  return result;
+}
+
 function filterFigmaNode(node) {
   if (node.type === "VECTOR") {
     return null;
@@ -349,7 +410,6 @@ function filterFigmaNode(node) {
   if (node.fills && node.fills.length > 0) {
     filtered.fills = node.fills.map((fill) => {
       var processedFill = Object.assign({}, fill);
-      delete processedFill.boundVariables;
       delete processedFill.imageRef;
 
       if (processedFill.gradientStops) {
@@ -376,7 +436,6 @@ function filterFigmaNode(node) {
   if (node.strokes && node.strokes.length > 0) {
     filtered.strokes = node.strokes.map((stroke) => {
       var processedStroke = Object.assign({}, stroke);
-      delete processedStroke.boundVariables;
       if (processedStroke.color) {
         processedStroke.color = rgbaToHex(processedStroke.color);
       }
@@ -390,6 +449,16 @@ function filterFigmaNode(node) {
 
   if (node.absoluteBoundingBox) {
     filtered.absoluteBoundingBox = node.absoluteBoundingBox;
+  }
+
+  for (var key of LAYOUT_KEYS) {
+    if (node[key] !== undefined) {
+      filtered[key] = node[key];
+    }
+  }
+
+  if (node.effects && node.effects.length > 0) {
+    filtered.effects = node.effects;
   }
 
   if (node.characters) {
@@ -432,7 +501,7 @@ async function getNodeInfo(nodeId) {
     format: "JSON_REST_V1",
   });
 
-  return filterFigmaNode(response.document);
+  return describeNode(node, filterFigmaNode(response.document));
 }
 
 async function getNodesInfo(nodeIds) {
@@ -451,10 +520,10 @@ async function getNodesInfo(nodeIds) {
         const response = await node.exportAsync({
           format: "JSON_REST_V1",
         });
-        return {
-          nodeId: node.id,
-          document: filterFigmaNode(response.document),
-        };
+        return Object.assign(
+          { nodeId: node.id },
+          await describeNode(node, filterFigmaNode(response.document))
+        );
       })
     );
 
