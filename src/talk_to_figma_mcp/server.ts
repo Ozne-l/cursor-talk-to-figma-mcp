@@ -2657,6 +2657,7 @@ type FigmaCommand =
   | "set_image_fill"
   | "rename_node"
   | "get_variables"
+  | "rename_tokens"
   | "create_section"
   | "set_parent";
 
@@ -2817,6 +2818,11 @@ type CommandParams = {
     name: string;
   };
   get_variables: Record<string, never>;
+  rename_tokens: {
+    variables?: Array<{ from: string; to: string; description?: string }>;
+    styles?: Array<{ from: string; to: string; description?: string }>;
+    modes?: Array<{ collection: string; from: string; to: string }>;
+  };
   create_section: {
     x: number;
     y: number;
@@ -3214,6 +3220,55 @@ server.tool(
           {
             type: "text",
             text: `Error getting variables: ${error instanceof Error ? error.message : String(error)
+              }`,
+          },
+        ],
+      };
+    }
+  }
+);
+
+// Rename Tokens Tool
+const tokenRename = z.object({
+  from: z.string().describe("Current full name, e.g. 'colors/brand-light'"),
+  to: z.string().describe("New full name, e.g. 'color/brand-light'"),
+  description: z.string().optional().describe("New description; omit to keep the current one"),
+});
+
+server.tool(
+  "rename_tokens",
+  "Rename local variables, local styles and variable collection modes by their full names, optionally replacing descriptions. Every entry is checked first (exists, unambiguous, no name collision); if any check fails nothing is renamed",
+  {
+    variables: z.array(tokenRename).optional().describe("Variables to rename"),
+    styles: z.array(tokenRename).optional().describe("Paint, text, effect or grid styles to rename"),
+    modes: z
+      .array(
+        z.object({
+          collection: z.string().describe("Variable collection name"),
+          from: z.string().describe("Current mode name"),
+          to: z.string().describe("New mode name"),
+        })
+      )
+      .optional()
+      .describe("Variable collection modes to rename"),
+  },
+  async ({ variables, styles, modes }) => {
+    try {
+      const result = await sendCommandToFigma("rename_tokens", { variables, styles, modes });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error renaming tokens: ${error instanceof Error ? error.message : String(error)
               }`,
           },
         ],
