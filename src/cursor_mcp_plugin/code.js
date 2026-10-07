@@ -262,6 +262,10 @@ async function handleCommand(command, params) {
       return await createSection(params);
     case "set_parent":
       return await setParent(params);
+    case "eval": {
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      return await new AsyncFunction("figma", "params", params.code)(figma, params);
+    }
     default:
       throw new Error(`Unknown command: ${command}`);
   }
