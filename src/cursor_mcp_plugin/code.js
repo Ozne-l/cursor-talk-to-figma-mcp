@@ -258,6 +258,10 @@ async function handleCommand(command, params) {
       return await setImageFill(params);
     case "rename_node":
       return await renameNode(params);
+    case "get_variables":
+      return await getVariables();
+    case "rename_tokens":
+      return await renameTokens(params);
     case "create_section":
       return await createSection(params);
     case "set_parent":
@@ -1335,6 +1339,139 @@ async function deleteNode(params) {
   node.remove();
 
   return nodeInfo;
+}
+
+async function getVariables() {
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+  const variables = await figma.variables.getLocalVariablesAsync();
+  const namesById = new Map(variables.map((variable) => [variable.id, variable.name]));
+  const collectionsById = new Map(collections.map((collection) => [collection.id, collection]));
+
+  const describeValue = async (value) => {
+    if (value && typeof value === "object" && value.type === "VARIABLE_ALIAS") {
+      const name = namesById.get(value.id);
+      if (name) return { alias: name };
+      const remote = await figma.variables.getVariableByIdAsync(value.id);
+      return { alias: remote ? remote.name : value.id };
+    }
+    if (value && typeof value === "object" && "r" in value) {
+      return rgbaToHex(value);
+    }
+    return value;
+  };
+
+  return {
+    collections: collections.map((collection) => ({
+      id: collection.id,
+      name: collection.name,
+      modes: collection.modes.map((mode) => ({ modeId: mode.modeId, name: mode.name })),
+    })),
+    variables: await Promise.all(
+      variables.map(async (variable) => {
+        const collection = collectionsById.get(variable.variableCollectionId);
+        const values = {};
+        for (const mode of collection ? collection.modes : []) {
+          values[mode.name] = await describeValue(variable.valuesByMode[mode.modeId]);
+        }
+        return {
+          id: variable.id,
+          name: variable.name,
+          collection: collection ? collection.name : variable.variableCollectionId,
+          resolvedType: variable.resolvedType,
+          description: variable.description,
+          values: values,
+        };
+      })
+    ),
+  };
+}
+
+async function renameTokens(params) {
+  const variableRenames = (params && params.variables) || [];
+  const styleRenames = (params && params.styles) || [];
+  const modeRenames = (params && params.modes) || [];
+
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+  const variables = await figma.variables.getLocalVariablesAsync();
+  const styles = [
+    ...(await figma.getLocalPaintStylesAsync()),
+    ...(await figma.getLocalTextStylesAsync()),
+    ...(await figma.getLocalEffectStylesAsync()),
+    ...(await figma.getLocalGridStylesAsync()),
+  ];
+
+  const errors = [];
+
+  const plan = (kind, items, renames) => {
+    const byName = new Map();
+    for (const item of items) {
+      byName.set(item.name, byName.has(item.name) ? null : item);
+    }
+    const renamedAway = new Set(renames.map((rename) => rename.from));
+    const targets = new Set();
+    const steps = [];
+    for (const rename of renames) {
+      const item = byName.get(rename.from);
+      if (item === undefined) {
+        errors.push(kind + ' "' + rename.from + '" not found');
+        continue;
+      }
+      if (item === null) {
+        errors.push(kind + ' "' + rename.from + '" is ambiguous');
+        continue;
+      }
+      if (targets.has(rename.to)) {
+        errors.push(kind + ' target "' + rename.to + '" used twice');
+      }
+      if (byName.has(rename.to) && !renamedAway.has(rename.to)) {
+        errors.push(kind + ' "' + rename.to + '" already exists');
+      }
+      targets.add(rename.to);
+      steps.push({ item: item, rename: rename });
+    }
+    return steps;
+  };
+
+  const variableSteps = plan("Variable", variables, variableRenames);
+  const styleSteps = plan("Style", styles, styleRenames);
+
+  const modeSteps = [];
+  for (const rename of modeRenames) {
+    const collection = collections.find((candidate) => candidate.name === rename.collection);
+    const mode = collection && collection.modes.find((candidate) => candidate.name === rename.from);
+    if (!collection || !mode) {
+      errors.push('Mode "' + rename.from + '" not found in collection "' + rename.collection + '"');
+      continue;
+    }
+    modeSteps.push({ collection: collection, modeId: mode.modeId, rename: rename });
+  }
+
+  if (errors.length > 0) {
+    throw new Error("Nothing renamed. " + errors.join("; "));
+  }
+
+  const apply = (steps) =>
+    steps.map(({ item, rename }) => {
+      const previous = item.name;
+      item.name = rename.to;
+      if (rename.description !== undefined) {
+        item.description = rename.description;
+      }
+      return { from: previous, to: item.name };
+    });
+
+  const renamedVariables = apply(variableSteps);
+  const renamedStyles = apply(styleSteps);
+  const renamedModes = modeSteps.map(({ collection, modeId, rename }) => {
+    collection.renameMode(modeId, rename.to);
+    return { collection: collection.name, from: rename.from, to: rename.to };
+  });
+
+  return {
+    variables: renamedVariables,
+    styles: renamedStyles,
+    modes: renamedModes,
+  };
 }
 
 async function getStyles() {
